@@ -25,6 +25,8 @@ KAKAO_HEADERS = {"Authorization": f"KakaoAK {os.environ['KAKAO_API_KEY']}"}
 T1_HEADERS = {"appKey": os.environ["T1_API_KEY"]}
 # 기상청 API허브는 헤더가 아니라 URL 쿼리 파라미터 "authKey"로 인증한다 (요청마다 params에 직접 포함)
 KPA_AUTH_KEY = os.environ["KPA_API_KEY"]
+# OpenRouteService는 헤더 "Authorization"에 키를 그대로 넣는다 (카카오처럼 "KakaoAK" 같은 접두사 없음)
+ORS_HEADERS = {"Authorization": os.environ["OPENROUTE_API_KEY"], "Content-Type": "application/json"}
 
 
 def geocode(address: str) -> dict:
@@ -89,6 +91,23 @@ def walk_route(start_x: float, start_y: float, end_x: float, end_y: float) -> di
     # 경로 전체의 총 거리/시간이 들어있다 - 나머지 feature들은 구간별 세부 좌표라 여기선 안 씀
     props = resp.json()["features"][0]["properties"]
     return {"total_distance_m": int(props["totalDistance"]), "total_time_sec": int(props["totalTime"])}
+
+
+def walk_route_roundtrip(start_x: float, start_y: float, length_m: int = 1000) -> dict:
+    """출발지에서 원하는 거리만큼 걷고 다시 출발지로 돌아오는 순환(왕복) 도보 코스를 계산합니다.
+    목적지를 정하지 않고 "그냥 20분만 걷고 싶다"처럼 목적지가 없는 요청에 사용하세요 (OpenRouteService round_trip).
+    walk_route(TMAP)는 출발-도착 두 점이 필요하지만, 이 Tool은 출발점 하나와 원하는 거리만 있으면 된다.
+    """
+    url = "https://api.openrouteservice.org/v2/directions/foot-walking/geojson"
+    body = {
+        "coordinates": [[start_x, start_y]],  # round_trip은 출발점 좌표 하나만 필요 (도착점 없음)
+        "options": {"round_trip": {"length": length_m, "points": 3}},  # points: 순환 경로를 만드는 경유점 개수(많을수록 더 도는 모양)
+    }
+    resp = requests.post(url, headers=ORS_HEADERS, json=body)
+    resp.raise_for_status()
+    # TMAP과 달리 실제 이동거리/시간은 properties.summary에 바로 들어있다 (segments[0]과 값 동일)
+    summary = resp.json()["features"][0]["properties"]["summary"]
+    return {"total_distance_m": int(summary["distance"]), "total_time_sec": int(summary["duration"])}
 
 
 def check_weather(x: float, y: float) -> dict:
@@ -168,7 +187,10 @@ def main():
     else:
         print("[SKIP] walk_route: 거리 0m가 아닌 카페 결과 없음")
 
-    # 4) API 호출이 필요 없는 순수 함수도 같은 방식으로 확인 (네트워크 없이 항상 성공해야 정상)
+    # 4) walk_route_roundtrip은 목적지 없이 출발점 하나로만 호출한다
+    _check("walk_route_roundtrip", lambda: walk_route_roundtrip(x, y, 1000))
+
+    # 5) API 호출이 필요 없는 순수 함수도 같은 방식으로 확인 (네트워크 없이 항상 성공해야 정상)
     _check("calc_time_budget", lambda: calc_time_budget("23:59", "00:01", 10))
     _check("straight_distance", lambda: straight_distance(37.5665, 126.9780, 37.4979, 127.0276))
     print("=== 완료 ===")
